@@ -80,7 +80,7 @@ class TestProduct:
 PRODUCTS: dict[str, TestProduct] = {
     BTN_LOVE: TestProduct(
         reply_label=BTN_LOVE,
-        path="/love",
+        path="/",
         log_name="love",
         explanation=(
             "🧡 Munosabat testi\n\n"
@@ -93,7 +93,7 @@ PRODUCTS: dict[str, TestProduct] = {
     ),
     BTN_MBTI: TestProduct(
         reply_label=BTN_MBTI,
-        path="/mbti",
+        path="/mbti/start",
         log_name="mbti",
         explanation=(
             "🧠 MBTI testi\n\n"
@@ -106,7 +106,7 @@ PRODUCTS: dict[str, TestProduct] = {
     ),
     BTN_STRESS: TestProduct(
         reply_label=BTN_STRESS,
-        path="/stress",
+        path="/stress/start",
         log_name="stress",
         explanation=(
             "😰 Stress testi\n\n"
@@ -382,8 +382,8 @@ async def main() -> None:
     dp.callback_query.register(on_admin_callback, F.data.startswith("admin:"))
 
     logger.info("Bot is starting (Qadam platform: love, mbti, stress)...")
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
