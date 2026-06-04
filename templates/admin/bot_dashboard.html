@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bot Start Tracking</title>
+    <style>
+      :root {
+        --bg: #f6f7fb;
+        --card: #ffffff;
+        --text: #111827;
+        --muted: #6b7280;
+        --border: #e5e7eb;
+        --primary: #6d28d9;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      .container { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
+      .eyebrow {
+        margin: 0 0 6px;
+        color: var(--primary);
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        font-size: 12px;
+      }
+      h1, h2, h3, p { margin-top: 0; }
+      .muted { color: var(--muted); }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 14px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 16px;
+      }
+      .stat-value { font-size: 28px; font-weight: 700; }
+      .stat-label { color: var(--muted); font-size: 12px; margin-bottom: 5px; }
+      .section { margin-top: 22px; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td {
+        border-bottom: 1px solid var(--border);
+        padding: 10px 8px;
+        text-align: left;
+        vertical-align: middle;
+      }
+      th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
+      .table-wrap { overflow-x: auto; }
+      code { word-break: break-all; }
+    </style>
+  </head>
+  <body>
+    <main class="container">
+      <p class="eyebrow">Qadam Bot</p>
+      <h1>Bot Tracking Dashboard</h1>
+      <p class="muted">Campaign sources, /start events, and test button clicks stored by this bot service.</p>
+
+      <section class="section">
+        <div class="grid">
+          <article class="card">
+            <div class="stat-label">Total bot users</div>
+            <div class="stat-value">{{ bot_tracking.total_bot_users }}</div>
+          </article>
+          <article class="card">
+            <div class="stat-label">Today bot starts</div>
+            <div class="stat-value">{{ bot_tracking.today_bot_starts }}</div>
+          </article>
+          <article class="card">
+            <div class="stat-label">Last 7 days bot starts</div>
+            <div class="stat-value">{{ bot_tracking.last_7_days_bot_starts }}</div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Test button clicks</h2>
+        <div class="grid">
+          <article class="card">
+            <div class="stat-label">Total test clicks</div>
+            <div class="stat-value">{{ bot_tracking.total_test_clicks }}</div>
+          </article>
+          <article class="card">
+            <div class="stat-label">Love clicks</div>
+            <div class="stat-value">{{ bot_tracking.love_test_clicks }}</div>
+          </article>
+          <article class="card">
+            <div class="stat-label">MBTI clicks</div>
+            <div class="stat-value">{{ bot_tracking.mbti_test_clicks }}</div>
+          </article>
+          <article class="card">
+            <div class="stat-label">Stress clicks</div>
+            <div class="stat-value">{{ bot_tracking.stress_test_clicks }}</div>
+          </article>
+        </div>
+
+        <div class="card section" style="margin-top: 14px;">
+          <h3 style="margin-top: 0;">Test clicks by source</h3>
+          {% if bot_tracking.test_clicks_by_source %}
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Source</th><th>Clicks</th></tr>
+              </thead>
+              <tbody>
+                {% for row in bot_tracking.test_clicks_by_source %}
+                <tr>
+                  <td><code>{{ row.source }}</code></td>
+                  <td>{{ row.count }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <p class="muted">No test click events yet.</p>
+          {% endif %}
+        </div>
+
+        <div class="card section" style="margin-top: 14px;">
+          <h3 style="margin-top: 0;">Latest 30 test click events</h3>
+          {% if bot_tracking.latest_test_click_events %}
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Created</th>
+                  <th>Name</th>
+                  <th>Username</th>
+                  <th>Telegram ID</th>
+                  <th>Test</th>
+                  <th>Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for event in bot_tracking.latest_test_click_events %}
+                <tr>
+                  <td>{{ event.created_at.strftime("%Y-%m-%d %H:%M") if event.created_at else "-" }}</td>
+                  <td>{{ event.first_name or "-" }}</td>
+                  <td>{% if event.username %}@{{ event.username }}{% else %}-{% endif %}</td>
+                  <td><code>{{ event.telegram_id }}</code></td>
+                  <td><code>{{ event.selected_test }}</code></td>
+                  <td><code>{{ event.source or "direct" }}</code></td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <p class="muted">No test click events yet.</p>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Start tracking</h2>
+        <div class="card">
+          <h2>Campaign link examples</h2>
+          <p class="muted">Set <code>TELEGRAM_BOT_USERNAME</code> in <code>.env</code> for your bot handle.</p>
+          <ul>
+            {% for link in bot_tracking.campaign_link_examples %}
+            <li><code>{{ link }}</code></li>
+            {% endfor %}
+          </ul>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="card">
+          <h2>Top 10 sources</h2>
+          {% if bot_tracking.top_sources %}
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Source</th><th>Starts</th></tr>
+              </thead>
+              <tbody>
+                {% for row in bot_tracking.top_sources %}
+                <tr>
+                  <td><code>{{ row.source }}</code></td>
+                  <td>{{ row.count }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <p class="muted">No bot start events yet.</p>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="card">
+          <h2>Latest 30 start events</h2>
+          {% if bot_tracking.latest_start_events %}
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Created</th>
+                  <th>Name</th>
+                  <th>Username</th>
+                  <th>Telegram ID</th>
+                  <th>Source</th>
+                  <th>Start count</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for event in bot_tracking.latest_start_events %}
+                <tr>
+                  <td>{{ event.created_at.strftime("%Y-%m-%d %H:%M") if event.created_at else "-" }}</td>
+                  <td>{{ event.first_name or "-" }}</td>
+                  <td>{% if event.username %}@{{ event.username }}{% else %}-{% endif %}</td>
+                  <td><code>{{ event.telegram_id }}</code></td>
+                  <td><code>{{ event.source or event.start_param or "direct" }}</code></td>
+                  <td>{{ event.start_count if event.start_count is not none else "-" }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <p class="muted">No bot start events yet.</p>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="card">
+          <h2>Recent bot users (contact / research)</h2>
+          <p class="muted">Prepared for admin outreach — no messages are sent automatically.</p>
+          {% if bot_tracking.recent_bot_users %}
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Username</th>
+                  <th>Telegram ID</th>
+                  <th>Last source</th>
+                  <th>Last seen</th>
+                  <th>Start count</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for user in bot_tracking.recent_bot_users %}
+                <tr>
+                  <td>{{ user.first_name or "-" }}</td>
+                  <td>{% if user.username %}@{{ user.username }}{% else %}-{% endif %}</td>
+                  <td><code>{{ user.telegram_id }}</code></td>
+                  <td><code>{{ user.last_source or "direct" }}</code></td>
+                  <td>{{ user.last_seen_at.strftime("%Y-%m-%d %H:%M") if user.last_seen_at else "-" }}</td>
+                  <td>{{ user.start_count }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <p class="muted">No bot users yet.</p>
+          {% endif %}
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

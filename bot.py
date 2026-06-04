@@ -3,11 +3,15 @@ import logging
 import os
 import sys
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import parse_qs, quote, urlencode, urlparse, urlunparse
 
 import httpx
+from aiohttp.client_exceptions import ClientConnectorError
 from aiogram import Bot, Dispatcher, F
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.filters import Command, CommandStart
+from aiogram.filters.command import CommandObject
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -18,6 +22,10 @@ from aiogram.types import (
     WebAppInfo,
 )
 from dotenv import load_dotenv
+
+from db.bot_tracking_service import get_bot_tracking_dashboard_stats
+from db.crud import save_bot_start_event, save_bot_test_click_event
+from db.database import SessionLocal, init_db, log_active_database_path
 
 load_dotenv()
 
@@ -36,11 +44,20 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBAPP_BASE_URL = os.getenv("WEBAPP_BASE_URL", "").rstrip("/")
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0") or "0")
+BOT_ADMIN_BASE_URL = os.getenv("BOT_ADMIN_BASE_URL", "").rstrip("/")
+BOT_ADMIN_PORT = int(os.getenv("BOT_ADMIN_PORT", "8081") or "8081")
 
 ADMIN_DENIED_TEXT = "Bu bo‘lim faqat admin uchun."
 ERR_OFFLINE = "Web ilova hozir ishlamayapti. Keyinroq urinib ko‘ring."
 ERR_UNAUTHORIZED = "Admin token noto‘g‘ri yoki ruxsat yo‘q."
 ERR_INVALID_JSON = "Server noto‘g‘ri javob qaytardi."
+
+SAFE_ANSWER_RETRY_DELAYS_SECONDS = (1, 2, 3)
+RETRIABLE_ANSWER_ERRORS = (
+    TelegramNetworkError,
+    ClientConnectorError,
+    asyncio.TimeoutError,
+)
 
 WELCOME_TEXT = (
     "Assalomu alaykum! 👋\n\n"
@@ -118,6 +135,70 @@ PRODUCTS: dict[str, TestProduct] = {
 }
 
 
+def _is_retriable_answer_error(exc: BaseException) -> bool:
+    if isinstance(exc, RETRIABLE_ANSWER_ERRORS):
+        return True
+    if isinstance(exc, TelegramNetworkError) and exc.__cause__ is not None:
+        return isinstance(exc.__cause__, RETRIABLE_ANSWER_ERRORS)
+    return False
+
+
+async def safe_answer(
+    message: Message,
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | ReplyKeyboardMarkup | None = None,
+    parse_mode: str | None = None,
+    **kwargs: Any,
+) -> bool:
+    """
+    Send message.answer with retries on temporary network failures.
+    Returns True when sent, False when all attempts fail (bot keeps running).
+    """
+    max_attempts = len(SAFE_ANSWER_RETRY_DELAYS_SECONDS) + 1
+    last_error: BaseException | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            await message.answer(
+                text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                **kwargs,
+            )
+            return True
+        except Exception as exc:
+            if not _is_retriable_answer_error(exc):
+                logger.exception(
+                    "Non-retriable error sending message to chat_id=%s",
+                    message.chat.id,
+                )
+                return False
+            last_error = exc
+            if attempt >= max_attempts:
+                break
+            delay = SAFE_ANSWER_RETRY_DELAYS_SECONDS[attempt - 1]
+            logger.warning(
+                "Telegram answer failed for chat_id=%s (attempt %s/%s): %s. "
+                "Retrying in %ss...",
+                message.chat.id,
+                attempt,
+                max_attempts,
+                exc,
+                delay,
+            )
+            await asyncio.sleep(delay)
+
+    logger.error(
+        "Failed to send Telegram answer to chat_id=%s after %s attempts: %s",
+        message.chat.id,
+        max_attempts,
+        last_error,
+        exc_info=last_error,
+    )
+    return False
+
+
 def build_webapp_url(base_url: str, telegram_user_id: int) -> str:
     """Legacy helper: append tg_id to base URL path/query."""
     parsed = urlparse(base_url)
@@ -174,6 +255,12 @@ def build_admin_panel_url() -> str:
     return f"{WEBAPP_BASE_URL}/admin/dashboard?token={token}"
 
 
+def build_bot_tracking_dashboard_url() -> str:
+    token = quote(ADMIN_TOKEN or "", safe="")
+    base = BOT_ADMIN_BASE_URL or f"http://127.0.0.1:{BOT_ADMIN_PORT}"
+    return f"{base}/admin/bot-tracking?token={token}"
+
+
 def is_admin_chat(chat_id: int) -> bool:
     return ADMIN_CHAT_ID > 0 and chat_id == ADMIN_CHAT_ID
 
@@ -191,6 +278,18 @@ def admin_menu_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="💳 Premium so‘rovlar",
                     callback_data="admin:pending",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📈 Bot /start tracking",
+                    callback_data="admin:bot_tracking",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🌐 Bot tracking panel",
+                    url=build_bot_tracking_dashboard_url(),
                 )
             ],
             [
@@ -226,6 +325,150 @@ async def admin_api_get(path: str) -> tuple[object | None, str | None]:
     except ValueError:
         logger.exception("Admin API invalid JSON: %s", path)
         return None, ERR_INVALID_JSON
+
+
+def _save_bot_start_sync(
+    *,
+    telegram_id: int,
+    username: str | None,
+    first_name: str | None,
+    last_name: str | None,
+    language_code: str | None,
+    start_param: str | None,
+) -> None:
+    db = SessionLocal()
+    try:
+        save_bot_start_event(
+            db=db,
+            telegram_id=telegram_id,
+            username=username,
+            first_name=first_name,
+            last_name=last_name,
+            language_code=language_code,
+            start_param=start_param,
+        )
+    finally:
+        db.close()
+
+
+async def record_bot_start(user, start_param: str | None) -> None:
+    try:
+        await asyncio.to_thread(
+            _save_bot_start_sync,
+            telegram_id=user.id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            language_code=user.language_code,
+            start_param=start_param,
+        )
+    except Exception:
+        logger.exception("Failed to record bot start for user %s", user.id)
+
+
+def _save_bot_test_click_sync(
+    *,
+    telegram_id: int,
+    username: str | None,
+    first_name: str | None,
+    selected_test: str,
+) -> None:
+    db = SessionLocal()
+    try:
+        save_bot_test_click_event(
+            db=db,
+            telegram_id=telegram_id,
+            username=username,
+            first_name=first_name,
+            selected_test=selected_test,
+        )
+    finally:
+        db.close()
+
+
+async def record_bot_test_click(user, selected_test: str) -> None:
+    try:
+        await asyncio.to_thread(
+            _save_bot_test_click_sync,
+            telegram_id=user.id,
+            username=user.username,
+            first_name=user.first_name,
+            selected_test=selected_test,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to record bot test click for user %s test=%s",
+            user.id,
+            selected_test,
+        )
+
+
+def _load_bot_tracking_stats():
+    db = SessionLocal()
+    try:
+        return get_bot_tracking_dashboard_stats(db=db)
+    finally:
+        db.close()
+
+
+def format_bot_tracking_stats(stats: dict) -> str:
+    lines = [
+        "📈 <b>Bot /start tracking</b>\n",
+        f"👥 Jami foydalanuvchilar: <b>{stats['total_bot_users']}</b>",
+        f"📅 Bugun /start: <b>{stats['today_bot_starts']}</b>",
+        f"🗓 So‘nggi 7 kun: <b>{stats['last_7_days_bot_starts']}</b>",
+        "",
+        "<b>Top manbalar:</b>",
+    ]
+    top_sources = stats.get("top_sources") or []
+    if top_sources:
+        for row in top_sources[:10]:
+            lines.append(f"• <code>{row['source']}</code>: {row['count']}")
+    else:
+        lines.append("• hali yo‘q")
+
+    lines.extend(["", "<b>So‘nggi 5 start:</b>"])
+    latest = stats.get("latest_start_events") or []
+    if latest:
+        for event in latest[:5]:
+            name = event.get("first_name") or "—"
+            source = event.get("source") or "direct"
+            count = event.get("start_count")
+            count_text = f", starts={count}" if count is not None else ""
+            lines.append(
+                f"• {event['created_at'].strftime('%m-%d %H:%M')} "
+                f"{name} / <code>{source}</code>{count_text}"
+            )
+    else:
+        lines.append("• hali yo‘q")
+
+    lines.extend(["", "<b>Kampaniya havolalari:</b>"])
+    for link in stats.get("campaign_link_examples") or []:
+        lines.append(f"• <code>{link}</code>")
+
+    lines.extend(
+        [
+            "",
+            "<b>Test tugma bosishlari:</b>",
+            f"• Jami: <b>{stats.get('total_test_clicks', 0)}</b>",
+            f"• Love: <b>{stats.get('love_test_clicks', 0)}</b>",
+            f"• MBTI: <b>{stats.get('mbti_test_clicks', 0)}</b>",
+            f"• Stress: <b>{stats.get('stress_test_clicks', 0)}</b>",
+            "",
+            f"🌐 To‘liq panel: {build_bot_tracking_dashboard_url()}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+async def send_bot_tracking(target: Message) -> None:
+    try:
+        stats = await asyncio.to_thread(_load_bot_tracking_stats)
+    except Exception:
+        logger.exception("Failed to load bot tracking stats")
+        await target.answer("Bot tracking statistikasini yuklab bo‘lmadi.")
+        return
+    await target.answer(format_bot_tracking_stats(stats), parse_mode="HTML")
 
 
 def format_stats(data: dict) -> str:
@@ -299,18 +542,22 @@ async def send_pending(target: Message) -> None:
     )
 
 
-async def cmd_start(message: Message) -> None:
-    user_id = message.from_user.id
-    logger.info("User %s started bot", user_id)
-    await message.answer(WELCOME_TEXT, reply_markup=main_menu_keyboard())
+async def cmd_start(message: Message, command: CommandObject) -> None:
+    user = message.from_user
+    start_param = (command.args or "").strip() or None
+    logger.info("User %s started bot start_param=%s", user.id, start_param or "direct")
+    await record_bot_start(user, start_param)
+    await safe_answer(message, WELCOME_TEXT, reply_markup=main_menu_keyboard())
 
 
 async def on_product_selected(message: Message, product: TestProduct) -> None:
-    user_id = message.from_user.id
-    logger.info("User %s selected %s test", user_id, product.log_name)
-    await message.answer(
+    user = message.from_user
+    logger.info("User %s selected %s test", user.id, product.log_name)
+    await record_bot_test_click(user, product.log_name)
+    await safe_answer(
+        message,
         product.explanation,
-        reply_markup=test_start_keyboard(product, user_id),
+        reply_markup=test_start_keyboard(product, user.id),
     )
 
 
@@ -324,6 +571,13 @@ async def on_mbti_selected(message: Message) -> None:
 
 async def on_stress_selected(message: Message) -> None:
     await on_product_selected(message, PRODUCTS[BTN_STRESS])
+
+
+async def cmd_botstats(message: Message) -> None:
+    if not is_admin_chat(message.chat.id):
+        await message.answer(ADMIN_DENIED_TEXT)
+        return
+    await send_bot_tracking(message)
 
 
 async def cmd_admin(message: Message) -> None:
@@ -361,6 +615,8 @@ async def on_admin_callback(callback: CallbackQuery) -> None:
         await send_stats(callback.message)
     elif callback.data == "admin:pending":
         await send_pending(callback.message)
+    elif callback.data == "admin:bot_tracking":
+        await send_bot_tracking(callback.message)
 
 
 async def main() -> None:
@@ -370,6 +626,8 @@ async def main() -> None:
     if not ADMIN_TOKEN or not ADMIN_CHAT_ID:
         logger.warning("ADMIN_TOKEN or ADMIN_CHAT_ID not set — admin commands disabled")
 
+    log_active_database_path()
+    init_db()
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
     dp.message.register(cmd_start, CommandStart())
@@ -379,6 +637,7 @@ async def main() -> None:
     dp.message.register(cmd_admin, Command("admin"))
     dp.message.register(cmd_stats, Command("stats"))
     dp.message.register(cmd_pending, Command("pending"))
+    dp.message.register(cmd_botstats, Command("botstats"))
     dp.callback_query.register(on_admin_callback, F.data.startswith("admin:"))
 
     logger.info("Bot is starting (Qadam platform: love, mbti, stress)...")
