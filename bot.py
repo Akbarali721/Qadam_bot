@@ -23,6 +23,7 @@ from aiogram.types import (
 )
 from dotenv import load_dotenv
 
+from config import WEBAPP_NOT_CONFIGURED_TEXT, is_webapp_configured
 from db.bot_tracking_service import get_bot_tracking_dashboard_stats
 from db.crud import save_bot_start_event, save_bot_test_click_event
 from db.database import SessionLocal, init_db, log_active_database_path
@@ -250,7 +251,9 @@ def test_start_keyboard(product: TestProduct, telegram_user_id: int) -> InlineKe
     )
 
 
-def build_admin_panel_url() -> str:
+def build_admin_panel_url() -> str | None:
+    if not is_webapp_configured(WEBAPP_BASE_URL):
+        return None
     token = quote(ADMIN_TOKEN or "", safe="")
     return f"{WEBAPP_BASE_URL}/admin/dashboard?token={token}"
 
@@ -266,45 +269,50 @@ def is_admin_chat(chat_id: int) -> bool:
 
 
 def admin_menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="📊 Statistika",
-                    callback_data="admin:stats",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="💳 Premium so‘rovlar",
-                    callback_data="admin:pending",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📈 Bot /start tracking",
-                    callback_data="admin:bot_tracking",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🌐 Bot tracking panel",
-                    url=build_bot_tracking_dashboard_url(),
-                )
-            ],
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text="📊 Statistika",
+                callback_data="admin:stats",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="💳 Premium so‘rovlar",
+                callback_data="admin:pending",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="📈 Bot /start tracking",
+                callback_data="admin:bot_tracking",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="🌐 Bot tracking panel",
+                url=build_bot_tracking_dashboard_url(),
+            )
+        ],
+    ]
+    admin_panel_url = build_admin_panel_url()
+    if admin_panel_url:
+        rows.append(
             [
                 InlineKeyboardButton(
                     text="🌐 Web admin panel",
-                    url=build_admin_panel_url(),
+                    url=admin_panel_url,
                 )
             ],
-        ]
-    )
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def admin_api_get(path: str) -> tuple[object | None, str | None]:
     if not ADMIN_TOKEN:
         return None, "ADMIN_TOKEN sozlanmagan."
+    if not is_webapp_configured(WEBAPP_BASE_URL):
+        return None, WEBAPP_NOT_CONFIGURED_TEXT
 
     url = f"{WEBAPP_BASE_URL}{path}"
     try:
@@ -554,6 +562,9 @@ async def on_product_selected(message: Message, product: TestProduct) -> None:
     user = message.from_user
     logger.info("User %s selected %s test", user.id, product.log_name)
     await record_bot_test_click(user, product.log_name)
+    if not is_webapp_configured(WEBAPP_BASE_URL):
+        await safe_answer(message, WEBAPP_NOT_CONFIGURED_TEXT)
+        return
     await safe_answer(
         message,
         product.explanation,
@@ -620,9 +631,13 @@ async def on_admin_callback(callback: CallbackQuery) -> None:
 
 
 async def main() -> None:
-    if not BOT_TOKEN or not WEBAPP_BASE_URL:
-        logger.error("BOT_TOKEN and WEBAPP_BASE_URL must be set in .env")
+    if not BOT_TOKEN:
+        logger.error("BOT_TOKEN must be set in .env")
         sys.exit(1)
+    if not is_webapp_configured(WEBAPP_BASE_URL):
+        logger.warning(
+            "WEBAPP_BASE_URL is not set — bot will start, but test WebApp buttons are disabled",
+        )
     if not ADMIN_TOKEN or not ADMIN_CHAT_ID:
         logger.warning("ADMIN_TOKEN or ADMIN_CHAT_ID not set — admin commands disabled")
 
