@@ -269,6 +269,49 @@
           {% endif %}
         </div>
       </section>
+
+      <section class="section">
+        <h2>Relationship invite funnel</h2>
+        <div class="grid">
+          <article class="card">
+            <div class="stat-label">invite_created</div>
+            <div class="stat-value">{{ relationship_funnel.invite_created }}</div>
+          </article>
+          <article class="card">
+            <div class="stat-label">partner_deeplink_opened</div>
+            <div class="stat-value">{{ relationship_funnel.partner_deeplink_opened }}</div>
+          </article>
+          <article class="card">
+            <div class="stat-label">partner_start_clicked</div>
+            <div class="stat-value">{{ relationship_funnel.partner_start_clicked }}</div>
+          </article>
+          <article class="card">
+            <div class="stat-label">partner_test_started</div>
+            <div class="stat-value">{{ relationship_funnel.partner_test_started }}</div>
+          </article>
+          <article class="card">
+            <div class="stat-label">partner_test_completed</div>
+            <div class="stat-value">{{ relationship_funnel.partner_test_completed }}</div>
+          </article>
+          <article class="card">
+            <div class="stat-label">result_ready</div>
+            <div class="stat-value">{{ relationship_funnel.result_ready }}</div>
+          </article>
+          <article class="card">
+            <div class="stat-label">user1_result_opened</div>
+            <div class="stat-value">{{ relationship_funnel.user1_result_opened }}</div>
+          </article>
+        </div>
+
+        <div class="card section" style="margin-top: 14px;">
+          <h3 style="margin-top: 0;">Conversion rates</h3>
+          <ul>
+            <li>Deep-link opened / invite_created: <strong>{{ relationship_funnel.conversion_deeplink_per_invite }}%</strong></li>
+            <li>Start clicked / deep-link opened: <strong>{{ relationship_funnel.conversion_start_per_deeplink }}%</strong></li>
+            <li>Partner completed / partner started: <strong>{{ relationship_funnel.conversion_completed_per_started }}%</strong></li>
+          </ul>
+        </div>
+      </section>
     </main>
   </body>
 </html>

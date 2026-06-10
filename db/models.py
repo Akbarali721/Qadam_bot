@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Integer, String, func
+from sqlalchemy import BigInteger, DateTime, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.database import Base
@@ -60,6 +60,23 @@ class BotTestClickEvent(Base):
     first_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     selected_test: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(),
+        nullable=False,
+        default=datetime.utcnow,
+        server_default=func.now(),
+    )
+
+
+class RelationshipFunnelEvent(Base):
+    __tablename__ = "relationship_funnel_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    invite_token: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    event_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    metadata_json: Mapped[str] = mapped_column(Text(), nullable=False, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(),
         nullable=False,

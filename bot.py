@@ -27,6 +27,12 @@ from config import WEBAPP_NOT_CONFIGURED_TEXT, is_webapp_configured
 from db.bot_tracking_service import get_bot_tracking_dashboard_stats
 from db.crud import save_bot_start_event, save_bot_test_click_event
 from db.database import SessionLocal, init_db, log_active_database_path
+from db.relationship_stats_service import get_relationship_funnel_stats
+from handlers.relationship_invite_handlers import (
+    handle_relationship_invite_deeplink,
+    handle_relationship_invite_start_callback,
+)
+from relationship_invite import parse_relationship_invite_token
 
 load_dotenv()
 
@@ -414,12 +420,35 @@ async def record_bot_test_click(user, selected_test: str) -> None:
 def _load_bot_tracking_stats():
     db = SessionLocal()
     try:
-        return get_bot_tracking_dashboard_stats(db=db)
+        return {
+            "bot_tracking": get_bot_tracking_dashboard_stats(db=db),
+            "relationship_funnel": get_relationship_funnel_stats(db=db),
+        }
     finally:
         db.close()
 
 
-def format_bot_tracking_stats(stats: dict) -> str:
+def format_relationship_funnel_stats(stats: dict) -> str:
+    lines = [
+        "",
+        "<b>Munosabat taklif voronkasi:</b>",
+        f"• invite_created: <b>{stats.get('invite_created', 0)}</b>",
+        f"• partner_deeplink_opened: <b>{stats.get('partner_deeplink_opened', 0)}</b>",
+        f"• partner_start_clicked: <b>{stats.get('partner_start_clicked', 0)}</b>",
+        f"• partner_test_started: <b>{stats.get('partner_test_started', 0)}</b>",
+        f"• partner_test_completed: <b>{stats.get('partner_test_completed', 0)}</b>",
+        f"• result_ready: <b>{stats.get('result_ready', 0)}</b>",
+        f"• user1_result_opened: <b>{stats.get('user1_result_opened', 0)}</b>",
+        f"• deeplink/invite: <b>{stats.get('conversion_deeplink_per_invite', 0)}%</b>",
+        f"• start/deeplink: <b>{stats.get('conversion_start_per_deeplink', 0)}%</b>",
+        f"• completed/started: <b>{stats.get('conversion_completed_per_started', 0)}%</b>",
+    ]
+    return "\n".join(lines)
+
+
+def format_bot_tracking_stats(stats_bundle: dict) -> str:
+    stats = stats_bundle.get("bot_tracking") or stats_bundle
+    rel = stats_bundle.get("relationship_funnel") or {}
     lines = [
         "📈 <b>Bot /start tracking</b>\n",
         f"👥 Jami foydalanuvchilar: <b>{stats['total_bot_users']}</b>",
@@ -466,6 +495,8 @@ def format_bot_tracking_stats(stats: dict) -> str:
             f"🌐 To‘liq panel: {build_bot_tracking_dashboard_url()}",
         ]
     )
+    if rel:
+        lines.append(format_relationship_funnel_stats(rel))
     return "\n".join(lines)
 
 
@@ -553,6 +584,21 @@ async def send_pending(target: Message) -> None:
 async def cmd_start(message: Message, command: CommandObject) -> None:
     user = message.from_user
     start_param = (command.args or "").strip() or None
+    invite_token = parse_relationship_invite_token(start_param)
+    if invite_token:
+        logger.info(
+            "User %s opened relationship invite token=%s",
+            user.id,
+            invite_token,
+        )
+        await handle_relationship_invite_deeplink(
+            message,
+            invite_token,
+            webapp_base_url=WEBAPP_BASE_URL,
+            safe_answer=safe_answer,
+        )
+        return
+
     logger.info("User %s started bot start_param=%s", user.id, start_param or "direct")
     await record_bot_start(user, start_param)
     await safe_answer(message, WELCOME_TEXT, reply_markup=main_menu_keyboard())
@@ -630,6 +676,14 @@ async def on_admin_callback(callback: CallbackQuery) -> None:
         await send_bot_tracking(callback.message)
 
 
+async def on_relationship_invite_start_callback(callback: CallbackQuery) -> None:
+    await handle_relationship_invite_start_callback(
+        callback,
+        webapp_base_url=WEBAPP_BASE_URL,
+        safe_answer=safe_answer,
+    )
+
+
 async def main() -> None:
     if not BOT_TOKEN:
         logger.error("BOT_TOKEN must be set in .env")
@@ -654,6 +708,10 @@ async def main() -> None:
     dp.message.register(cmd_pending, Command("pending"))
     dp.message.register(cmd_botstats, Command("botstats"))
     dp.callback_query.register(on_admin_callback, F.data.startswith("admin:"))
+    dp.callback_query.register(
+        on_relationship_invite_start_callback,
+        F.data.startswith("rel_invite:start:"),
+    )
 
     logger.info("Bot is starting (Qadam platform: love, mbti, stress)...")
     await bot.delete_webhook(drop_pending_updates=True)
